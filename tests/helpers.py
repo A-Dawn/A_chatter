@@ -137,6 +137,35 @@ def build_parse_response(run_at: str, task_type: str = "reminder") -> str:
     )
 
 
+def build_confirmation_response(prefix: str = "我先帮你核对一下，这个任务草稿看起来是这样的。") -> str:
+    """构造确认文案 LLM 响应。"""
+
+    return (
+        f"{prefix}\n"
+        "草稿 ID：draft_placeholder\n"
+        "标题：交报告提醒\n"
+        "类型：硬提醒\n"
+        "目标：qq:private:10000\n"
+        "时间：明天 20:00\n"
+        "内容：提醒我交报告\n"
+        "如果没问题，直接回复“确认”或“就这样”就行；想取消就说“取消”。"
+    )
+
+
+def build_confirmation_intent_response(decision: str, confidence: float = 0.92, draft_id: str = "") -> str:
+    """构造自然确认/取消意图 LLM 响应。"""
+
+    return json.dumps(
+        {
+            "decision": decision,
+            "confidence": confidence,
+            "draft_id": draft_id,
+            "reason": "测试意图",
+        },
+        ensure_ascii=False,
+    )
+
+
 def build_future_parse_response(task_type: str = "reminder") -> str:
     """构造一小时后的任务解析响应。"""
 

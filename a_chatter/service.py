@@ -9,7 +9,17 @@ import random
 from .config import AChatterConfig, TargetConfig
 from .context_builder import ContextBuilder
 from .frequency import compute_trigger_probability, get_source_frequency
-from .models import AChatterTask, ChatTarget, RunStatus, ScheduleKind, TaskDraft, TaskStatus, TaskType
+from .models import (
+    AChatterTask,
+    ChatTarget,
+    ConfirmationDecision,
+    ConfirmationIntent,
+    RunStatus,
+    ScheduleKind,
+    TaskDraft,
+    TaskStatus,
+    TaskType,
+)
 from .parser import NaturalLanguageTaskParser, build_parse_context
 from .proactive import ProactiveExecutor
 from .rbac import RbacService
@@ -102,6 +112,55 @@ class AChatterService:
             raise ValueError("没有找到可取消的草稿")
         await self.storage.delete_pending(target_draft.draft_id)
         return target_draft.draft_id
+
+    async def handle_natural_confirmation_reply(
+        self,
+        text: str,
+        context: Dict[str, Any],
+    ) -> tuple[bool, str, ConfirmationIntent]:
+        """处理用户对待确认草稿的自然语言确认或取消回复。"""
+
+        actor = build_actor(context)
+        if not actor.subject:
+            return (
+                False,
+                "",
+                ConfirmationIntent(
+                    decision=ConfirmationDecision.UNKNOWN,
+                    confidence=0.0,
+                    reason="无法识别回复用户",
+                ),
+            )
+
+        drafts = await self.storage.list_pending_for_actor(actor.platform, actor.user_id)
+        if not drafts:
+            return (
+                False,
+                "",
+                ConfirmationIntent(
+                    decision=ConfirmationDecision.UNKNOWN,
+                    confidence=0.0,
+                    reason="没有待确认草稿",
+                ),
+            )
+
+        intent = await self.parser.classify_confirmation_reply(text, drafts)
+        if intent.decision == ConfirmationDecision.UNKNOWN:
+            return False, "", intent
+
+        if len(drafts) > 1 and not intent.draft_id:
+            return (
+                True,
+                "你有多个待确认草稿，请说明要确认或取消哪一个草稿 ID。",
+                intent,
+            )
+
+        if intent.decision == ConfirmationDecision.CONFIRM:
+            task = await self.confirm_draft(context, intent.draft_id)
+            return True, f"已创建任务：\n{format_task_summary(task)}", intent
+
+        draft_id = await self.cancel_draft(context, intent.draft_id)
+        return True, f"已取消草稿：{draft_id}", intent
 
     async def list_tasks_for_context(self, context: Dict[str, Any], target_text: str = "") -> List[AChatterTask]:
         """按当前上下文或指定目标列出任务。"""

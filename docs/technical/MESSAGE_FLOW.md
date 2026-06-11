@@ -52,11 +52,11 @@ sequenceDiagram
     U->>C: /ac 新增 明天 20:00 提醒我交报告
     C->>R: 检查当前用户和目标权限
     R-->>C: 允许 / 拒绝
-    C->>L: 解析自然语言任务
-    L-->>C: TaskDraft + 确认摘要
+    C->>L: 解析自然语言任务并生成确认话术
+    L-->>C: TaskDraft + 自然确认文案
     C->>S: 保存 pending confirmation
     C->>Send: 发送确认消息
-    Send-->>U: 请确认任务草稿
+    Send-->>U: 自然确认草稿
 
     U->>C: /ac 确认
     C->>S: 读取并校验 5 分钟内的草稿
@@ -65,6 +65,8 @@ sequenceDiagram
     C->>Send: 发送创建成功消息
     Send-->>U: 已创建任务
 ```
+
+用户也可以直接回复“确认”“就这样”“算了”等自然语言。该消息会在 `chat.receive.after_process` Hook 中被 A_chatter 识别；命中确认或取消后，插件发送结果并中止后续聊天主链，避免 Maisaka 再把确认消息当作普通聊天处理。
 
 ## Maisaka 自然语言工具创建任务
 
@@ -82,16 +84,16 @@ sequenceDiagram
     M->>TP: 调用 a_chatter_create_task_draft
     TP->>T: plugin.invoke_tool + stream_id/user_id/platform/group_id
     T->>R: 初步权限检查
-    T->>L: 解析用户自然语言需求
-    L-->>T: TaskDraft + 置信度 + 歧义项
+    T->>L: 解析用户自然语言需求并生成确认话术
+    L-->>T: TaskDraft + 置信度 + 歧义项 + 自然确认文案
     T->>R: 完整权限和目标校验
     T->>S: 保存 pending confirmation
     T-->>TP: requires_user_confirmation=true + task_preview
     TP-->>M: 工具结果
-    M-->>U: 自然转述草稿并询问确认
+    M-->>U: 使用确认文案自然询问用户
 
-    U->>M: 确认
-    M->>TP: 调用 a_chatter_confirm_task
+    U->>M: 确认 / 就这样 / 算了
+    M->>TP: 调用 a_chatter_confirm_task 或 a_chatter_cancel_draft
     TP->>T: plugin.invoke_tool + 上下文
     T->>S: 读取 pending confirmation
     T->>S: 保存正式 task

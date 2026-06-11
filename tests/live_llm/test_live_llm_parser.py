@@ -14,7 +14,7 @@ from maibot_sdk.context import PluginContext
 from src.plugin_runtime.integration import PluginRuntimeManager
 
 from a_chatter.config import AChatterConfig
-from a_chatter.models import ScheduleKind, TaskType
+from a_chatter.models import ConfirmationDecision, ScheduleKind, TaskType
 from a_chatter.parser import NaturalLanguageTaskParser, TaskNeedsClarification, build_parse_context
 from a_chatter.service import AChatterService
 from a_chatter.utils import utc_now
@@ -87,9 +87,10 @@ def _assert_future_absolute_time(draft: Any) -> None:
 
 
 def _assert_confirmation_text(confirmation_text: str) -> None:
-    assert "请确认是否创建" in confirmation_text
     assert "/ac 确认" in confirmation_text
     assert "/ac 取消" in confirmation_text
+    assert "确认" in confirmation_text
+    assert "取消" in confirmation_text
 
 
 def _print_draft_analysis(case_name: str, draft: Any, confirmation_text: str) -> None:
@@ -107,6 +108,7 @@ def _print_draft_analysis(case_name: str, draft: Any, confirmation_text: str) ->
     print(f"must_say={draft.content.must_say}")
     print(f"requires_web={draft.content.requires_web}")
     print(f"confirmation_has_second_step={'/ac 确认' in confirmation_text and '/ac 取消' in confirmation_text}")
+    print(f"confirmation_preview={confirmation_text[:160]}")
 
 
 async def _parse_live(text: str, raw_context: Dict[str, str] | None = None) -> tuple[Any, str]:
@@ -210,3 +212,31 @@ async def test_live_llm_service_create_draft_uses_host_capability(tmp_path) -> N
     _assert_draft_matches_plan(draft)
     _print_draft_analysis("service.create_draft", draft, confirmation_text)
     _assert_confirmation_text(confirmation_text)
+
+
+@pytest.mark.asyncio
+async def test_live_llm_natural_confirmation_reply_matches_plan(tmp_path) -> None:
+    """真实 LLM 应能把非字面自然回复识别为确认或取消。"""
+
+    _require_live_llm()
+    config = AChatterConfig()
+    service = AChatterService(_build_plugin_context(), config, tmp_path)
+    await service.start()
+
+    draft, confirmation_text = await service.create_draft(
+        "明天晚上八点提醒我交报告",
+        {"platform": "qq", "user_id": "10000", "stream_id": "qq-private-10000"},
+    )
+    handled, response, intent = await service.handle_natural_confirmation_reply(
+        "这版可以，就按这个安排吧",
+        {"platform": "qq", "user_id": "10000", "stream_id": "qq-private-10000"},
+    )
+
+    _print_draft_analysis("natural_confirmation", draft, confirmation_text)
+    print(f"[A_chatter live_llm] natural_confirmation_decision={intent.decision.value}")
+    print(f"[A_chatter live_llm] natural_confirmation_confidence={intent.confidence}")
+    print(f"[A_chatter live_llm] natural_confirmation_response={response}")
+    assert handled is True
+    assert intent.decision == ConfirmationDecision.CONFIRM
+    assert intent.confidence >= 0.7
+    assert "已创建任务" in response

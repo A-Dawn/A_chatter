@@ -40,6 +40,14 @@ class RunStatus(str, Enum):
     SKIPPED = "skipped"
 
 
+class ConfirmationDecision(str, Enum):
+    """用户对待确认草稿的自然语言决策。"""
+
+    CONFIRM = "confirm"
+    CANCEL = "cancel"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class Actor:
     """发起操作的用户。"""
@@ -115,6 +123,16 @@ class TaskDraft:
     source_stream_id: str = ""
     created_at: datetime = field(default_factory=lambda: datetime.now(timezone.utc))
     expires_at: Optional[datetime] = None
+
+
+@dataclass(frozen=True)
+class ConfirmationIntent:
+    """自然语言确认意图识别结果。"""
+
+    decision: ConfirmationDecision
+    confidence: float = 0.0
+    draft_id: str = ""
+    reason: str = ""
 
 
 @dataclass

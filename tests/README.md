@@ -2,7 +2,7 @@
 
 ## unit
 
-纯单元测试，不依赖真实宿主或外部服务。覆盖频率函数、RBAC、SQLite 存储、Tavily 响应归一化和插件组件注册。
+纯单元测试，不依赖真实宿主或外部服务。覆盖频率函数、RBAC、SQLite 存储、Tavily 响应归一化、LLM 确认话术锚点、自然确认回复判定和插件组件注册。
 
 运行：
 
@@ -12,7 +12,7 @@ uv run pytest plugins/A_chatter/tests/unit -q
 
 ## functional
 
-使用 fake SDK context 测试共享业务服务链路。覆盖命令创建草稿、确认、列表，Tool 创建与确认，到期提醒发送，以及日程主动任务触发 Maisaka。
+使用 fake SDK context 测试共享业务服务链路。覆盖命令创建草稿、自然确认、取消、列表，Tool 创建与自然确认，到期提醒发送，以及日程主动任务触发 Maisaka。
 
 运行：
 
@@ -22,7 +22,7 @@ uv run pytest plugins/A_chatter/tests/functional -q
 
 ## real_flow
 
-使用 `AChatterPlugin` 实例走更接近宿主的生命周期流程：注入 context、设置配置、`on_load`、调用命令/Tool handler、`on_unload`。SQLite 路径会重定向到 pytest 临时目录。
+使用 `AChatterPlugin` 实例走更接近宿主的生命周期流程：注入 context、设置配置、`on_load`、调用命令/Tool handler、自然确认 Hook handler、`on_unload`。SQLite 路径会重定向到 pytest 临时目录。
 
 运行：
 
@@ -61,7 +61,8 @@ A_CHATTER_LIVE_LLM=1 uv run pytest plugins/A_chatter/tests/live_llm -q
 4. `run_at` 必须是带时区的绝对时间，并晚于当前时间。
 5. 默认目标必须保持当前真实聊天流 `stream_id`，不能自行计算 session_id。
 6. 置信度必须不低于 0.7，且无歧义项。
-7. 确认文案必须保留二次确认语义。
+7. 确认文案必须由 LLM 生成自然话术，并保留 `/ac 确认`、`/ac 取消` 等二次确认锚点。
+8. 自然确认回复必须能被识别为确认或取消，并复用 pending confirmation。
 
 ## live_full_loop
 

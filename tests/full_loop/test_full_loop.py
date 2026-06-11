@@ -14,7 +14,7 @@ from a_chatter.service import AChatterService
 from a_chatter.tavily_client import TavilyResult
 from a_chatter.utils import utc_now
 
-from tests.helpers import FakeContext, default_sdk_context
+from tests.helpers import FakeContext, build_confirmation_response, default_sdk_context
 
 
 pytestmark = pytest.mark.full_loop
@@ -78,7 +78,8 @@ async def _create_and_confirm_due_task(
 
     success, confirmation_text, _ = await commands.handle(f"新增 {user_request}", "qq-private-10000", sdk_context)
     assert success is True
-    assert "请确认是否创建" in confirmation_text
+    assert "/ac 确认" in confirmation_text
+    assert "/ac 取消" in confirmation_text
 
     success, created_text, _ = await commands.handle("确认", "qq-private-10000", sdk_context)
     assert success is True
@@ -105,7 +106,8 @@ async def test_command_confirm_scheduler_reminder_full_loop(tmp_path: Path) -> N
                 title="交报告提醒",
                 user_intent="提醒我交报告",
                 run_at=run_at,
-            )
+            ),
+            build_confirmation_response(),
         ],
     )
 
@@ -134,7 +136,8 @@ async def test_command_confirm_scheduler_schedule_proactive_full_loop(tmp_path: 
                 user_intent="问问大家今天项目进度怎么样",
                 run_at=run_at,
                 memory_query="项目进度",
-            )
+            ),
+            build_confirmation_response(),
         ],
     )
 
@@ -168,6 +171,7 @@ async def test_command_confirm_scheduler_research_digest_full_loop(tmp_path: Pat
                 requires_web=True,
                 web_query="AI 新闻摘要",
             ),
+            build_confirmation_response(),
             "- OpenAI 发布新模型更新\n  来源：https://example.com/ai-news",
         ],
     )

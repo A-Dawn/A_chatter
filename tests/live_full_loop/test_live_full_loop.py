@@ -110,11 +110,16 @@ async def test_live_llm_command_confirm_and_run_reminder_full_loop(tmp_path: Pat
 
     success, confirmation_text, _ = await commands.handle("新增 明天晚上八点提醒我交报告", "qq-private-10000", sdk_context)
     assert success is True
-    assert "请确认是否创建" in confirmation_text
+    assert "/ac 确认" in confirmation_text
+    assert "/ac 取消" in confirmation_text
     assert "llm.generate" in host.capability_calls
 
-    success, created_text, _ = await commands.handle("确认", "qq-private-10000", sdk_context)
-    assert success is True
+    handled, created_text, intent = await service.handle_natural_confirmation_reply(
+        "这版可以，就按这个安排吧",
+        sdk_context,
+    )
+    assert handled is True
+    assert intent.decision.value == "confirm"
     assert "已创建任务" in created_text
 
     tasks = await service.storage.list_tasks(target_stream_id="qq-private-10000")
@@ -166,6 +171,7 @@ async def test_live_llm_schedule_proactive_fallback_generates_final_message(tmp_
     )
     assert success is True
     assert "日程主动发言" in confirmation_text
+    assert "/ac 确认" in confirmation_text
 
     success, created_text, _ = await commands.handle("确认", "qq-group-123456", sdk_context)
     assert success is True

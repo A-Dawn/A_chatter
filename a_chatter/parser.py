@@ -7,7 +7,17 @@ from zoneinfo import ZoneInfo
 import json
 import re
 
-from .models import Actor, ChatTarget, ScheduleKind, ScheduleSpec, TaskContent, TaskDraft, TaskType
+from .models import (
+    Actor,
+    ChatTarget,
+    ConfirmationDecision,
+    ConfirmationIntent,
+    ScheduleKind,
+    ScheduleSpec,
+    TaskContent,
+    TaskDraft,
+    TaskType,
+)
 from .utils import default_target_from_context, extract_llm_response, parse_datetime, utc_now
 
 
@@ -58,7 +68,40 @@ class NaturalLanguageTaskParser:
     async def build_confirmation_text(self, draft: TaskDraft) -> str:
         """生成二次确认文案。"""
 
-        schedule_text = self._format_schedule(draft)
+        summary = self.build_confirmation_summary(draft)
+        prompt = self._build_confirmation_prompt(summary)
+        result = await self._ctx.llm.generate(prompt=prompt, model=self._model_task, temperature=0.6, max_tokens=600)
+        response_text = extract_llm_response(result).strip()
+        if isinstance(result, dict) and result.get("success") is False:
+            raise TaskParseError(f"LLM 生成确认文案失败：{result.get('error') or response_text or '未知错误'}")
+        if not response_text:
+            raise TaskParseError("LLM 没有返回确认文案")
+        return self._ensure_confirmation_actions(response_text, summary)
+
+    async def classify_confirmation_reply(self, text: str, drafts: List[TaskDraft]) -> ConfirmationIntent:
+        """识别用户自然语言回复是否是在确认或取消待确认草稿。"""
+
+        normalized_text = str(text or "").strip()
+        if not normalized_text or not drafts:
+            return ConfirmationIntent(decision=ConfirmationDecision.UNKNOWN, confidence=0.0, reason="no_text_or_draft")
+
+        rule_intent = self._classify_confirmation_reply_by_rule(normalized_text, drafts)
+        if rule_intent.decision != ConfirmationDecision.UNKNOWN:
+            return rule_intent
+
+        prompt = self._build_confirmation_reply_prompt(normalized_text, drafts)
+        result = await self._ctx.llm.generate(prompt=prompt, model=self._model_task, temperature=0.0, max_tokens=500)
+        response_text = extract_llm_response(result)
+        if isinstance(result, dict) and result.get("success") is False:
+            raise TaskParseError(f"LLM 识别确认回复失败：{result.get('error') or response_text or '未知错误'}")
+        payload = self._parse_json_response(response_text)
+        return self._confirmation_intent_from_payload(payload, drafts)
+
+    @classmethod
+    def build_confirmation_summary(cls, draft: TaskDraft) -> Dict[str, str]:
+        """构造确认文案和自然回复判定共用的草稿摘要。"""
+
+        schedule_text = cls._format_schedule(draft)
         target_text = draft.target.key if draft.target.stream_id else f"{draft.target.key}（未解析聊天流）"
         task_type_label = {
             TaskType.REMINDER: "硬提醒",
@@ -66,17 +109,15 @@ class NaturalLanguageTaskParser:
             TaskType.AUTO_PROACTIVE: "自动主动发起",
             TaskType.RESEARCH_DIGEST: "联网摘要",
         }[draft.task_type]
-        web_text = f"\n联网检索：{draft.content.web_query or '按任务内容生成'}" if draft.content.requires_web else ""
-        return (
-            "请确认是否创建以下 A_chatter 任务：\n"
-            f"草稿 ID：{draft.draft_id}\n"
-            f"标题：{draft.title}\n"
-            f"类型：{task_type_label}\n"
-            f"目标：{target_text}\n"
-            f"时间：{schedule_text}\n"
-            f"内容：{draft.content.user_intent}{web_text}\n"
-            "确认请回复 `/ac 确认` 或 `/ac 确认 <草稿ID>`，取消请回复 `/ac 取消`。"
-        )
+        return {
+            "draft_id": draft.draft_id,
+            "title": draft.title,
+            "task_type": task_type_label,
+            "target": target_text,
+            "schedule": schedule_text,
+            "content": draft.content.user_intent,
+            "web_query": draft.content.web_query or "按任务内容生成" if draft.content.requires_web else "",
+        }
 
     def _build_parse_prompt(self, text: str, context: ParseContext) -> str:
         now = utc_now().astimezone(ZoneInfo(context.timezone))
@@ -149,6 +190,212 @@ class NaturalLanguageTaskParser:
 用户需求：
 {text}
 """
+
+    @staticmethod
+    def _build_confirmation_prompt(summary: Dict[str, str]) -> str:
+        web_line = f"\n联网检索：{summary['web_query']}" if summary["web_query"] else ""
+        return f"""你是 MaiBot 插件 A_chatter 的确认消息润色器。请把任务草稿写成一段自然、简洁、中文的二次确认话术。
+
+要求：
+1. 保留所有关键信息：草稿 ID、标题、类型、目标、时间、内容。
+2. 语气可以自然一点，但不要假装任务已经创建。
+3. 必须明确告诉用户可以自然回复确认或取消，也可以用 /ac 确认、/ac 取消。
+4. 不要输出 Markdown 表格，不要输出代码块，不要暴露 LLM 或内部解析流程。
+5. 最终只输出用户可见消息。
+
+草稿摘要：
+草稿 ID：{summary["draft_id"]}
+标题：{summary["title"]}
+类型：{summary["task_type"]}
+目标：{summary["target"]}
+时间：{summary["schedule"]}
+内容：{summary["content"]}{web_line}
+
+用户可见确认消息：
+"""
+
+    @staticmethod
+    def _ensure_confirmation_actions(text: str, summary: Dict[str, str]) -> str:
+        """确保 LLM 文案保留精确草稿信息和可操作确认锚点。"""
+
+        normalized_text = str(text or "").strip()
+        draft_id = summary["draft_id"]
+        summary_fragments = [
+            summary["draft_id"],
+            summary["title"],
+            summary["task_type"],
+            summary["target"],
+            summary["schedule"],
+            summary["content"],
+            summary["web_query"],
+        ]
+        if not all(fragment in normalized_text for fragment in summary_fragments if fragment):
+            lines = [
+                "核对信息：",
+                f"草稿 ID：{summary['draft_id']}",
+                f"标题：{summary['title']}",
+                f"类型：{summary['task_type']}",
+                f"目标：{summary['target']}",
+                f"时间：{summary['schedule']}",
+                f"内容：{summary['content']}",
+            ]
+            if summary["web_query"]:
+                lines.append(f"联网检索：{summary['web_query']}")
+            exact_summary = "\n".join(lines)
+            normalized_text = f"{normalized_text}\n\n{exact_summary}" if normalized_text else exact_summary
+
+        required_fragments = ("/ac 确认", "/ac 取消", draft_id)
+        if all(fragment in normalized_text for fragment in required_fragments):
+            return normalized_text
+        action_line = f"确认的话可以直接回复“确认/就这样”，也可以发 `/ac 确认 {draft_id}`；取消则回复“取消/算了”，或发 `/ac 取消 {draft_id}`。"
+        return f"{normalized_text}\n{action_line}" if normalized_text else action_line
+
+    @classmethod
+    def _build_confirmation_reply_prompt(cls, text: str, drafts: List[TaskDraft]) -> str:
+        draft_lines = []
+        for draft in drafts:
+            summary = cls.build_confirmation_summary(draft)
+            draft_lines.append(
+                json.dumps(
+                    {
+                        "draft_id": summary["draft_id"],
+                        "title": summary["title"],
+                        "type": summary["task_type"],
+                        "target": summary["target"],
+                        "schedule": summary["schedule"],
+                        "content": summary["content"],
+                    },
+                    ensure_ascii=False,
+                )
+            )
+        return f"""你是 A_chatter 的二次确认回复判定器。请判断用户是否在确认或取消待确认任务草稿。
+最终回复必须只包含一个 JSON 对象，不能包含解释、Markdown 或 JSON 外字符。
+
+允许的 decision：
+- confirm：用户明确同意创建草稿，例如“确认”“可以”“就这样”“帮我设上”“没问题”
+- cancel：用户明确取消或否定，例如“取消”“算了”“不要了”“先别建”
+- unknown：用户没有明确表达确认/取消，或只是在闲聊、修改需求、提出问题
+
+如果用户提到草稿 ID，请提取到 draft_id；否则留空。
+多个草稿且用户没有指定草稿时，如果意图明确也输出 decision，但 draft_id 留空。
+
+输出 JSON：
+{{
+  "decision": "confirm|cancel|unknown",
+  "confidence": 0.0,
+  "draft_id": "",
+  "reason": "简短原因"
+}}
+
+待确认草稿：
+{chr(10).join(draft_lines)}
+
+用户回复：
+{text}
+"""
+
+    @classmethod
+    def _classify_confirmation_reply_by_rule(cls, text: str, drafts: List[TaskDraft]) -> ConfirmationIntent:
+        normalized_text = str(text or "").strip()
+        draft_id = cls._extract_draft_id_from_text(normalized_text, drafts)
+        compact = re.sub(r"\s+", "", normalized_text).lower()
+        if not compact:
+            return ConfirmationIntent(decision=ConfirmationDecision.UNKNOWN, reason="empty")
+
+        confirm_phrases = {
+            "确认",
+            "确定",
+            "可以",
+            "好",
+            "好的",
+            "行",
+            "没问题",
+            "就这样",
+            "就这个",
+            "帮我设上",
+            "帮我创建",
+            "创建吧",
+            "设上吧",
+            "ok",
+            "okay",
+            "yes",
+            "y",
+        }
+        cancel_phrases = {
+            "取消",
+            "算了",
+            "不要",
+            "不要了",
+            "别建",
+            "先别",
+            "先别建",
+            "撤销",
+            "作废",
+            "不用了",
+            "no",
+            "n",
+        }
+        if compact in confirm_phrases:
+            return ConfirmationIntent(
+                decision=ConfirmationDecision.CONFIRM,
+                confidence=0.95,
+                draft_id=draft_id,
+                reason="rule_confirm_exact",
+            )
+        if compact in cancel_phrases:
+            return ConfirmationIntent(
+                decision=ConfirmationDecision.CANCEL,
+                confidence=0.95,
+                draft_id=draft_id,
+                reason="rule_cancel_exact",
+            )
+
+        if any(phrase in compact for phrase in ("就这样", "就这个", "帮我设上", "创建吧", "设上吧")):
+            return ConfirmationIntent(
+                decision=ConfirmationDecision.CONFIRM,
+                confidence=0.86,
+                draft_id=draft_id,
+                reason="rule_confirm_phrase",
+            )
+        if any(phrase in compact for phrase in ("取消", "算了", "不要了", "别建", "先别建", "作废")):
+            return ConfirmationIntent(
+                decision=ConfirmationDecision.CANCEL,
+                confidence=0.86,
+                draft_id=draft_id,
+                reason="rule_cancel_phrase",
+            )
+        return ConfirmationIntent(decision=ConfirmationDecision.UNKNOWN, confidence=0.0, draft_id=draft_id)
+
+    @staticmethod
+    def _extract_draft_id_from_text(text: str, drafts: List[TaskDraft]) -> str:
+        for draft in drafts:
+            if draft.draft_id and draft.draft_id in text:
+                return draft.draft_id
+        match = re.search(r"\bdraft[_-][0-9A-Za-z_-]+\b", text)
+        return match.group(0) if match is not None else ""
+
+    @classmethod
+    def _confirmation_intent_from_payload(cls, payload: Dict[str, Any], drafts: List[TaskDraft]) -> ConfirmationIntent:
+        raw_decision = str(payload.get("decision") or "").strip().lower()
+        try:
+            decision = ConfirmationDecision(raw_decision)
+        except ValueError:
+            decision = ConfirmationDecision.UNKNOWN
+
+        confidence = float(payload.get("confidence") or 0.0)
+        draft_id = str(payload.get("draft_id") or "").strip()
+        valid_draft_ids = {draft.draft_id for draft in drafts if draft.draft_id}
+        if draft_id and draft_id not in valid_draft_ids:
+            decision = ConfirmationDecision.UNKNOWN
+            confidence = 0.0
+        if confidence < 0.7:
+            decision = ConfirmationDecision.UNKNOWN
+        return ConfirmationIntent(
+            decision=decision,
+            confidence=confidence,
+            draft_id=draft_id,
+            reason=str(payload.get("reason") or "").strip(),
+        )
 
     def _parse_json_response(self, response_text: str) -> Dict[str, Any]:
         text = str(response_text or "").strip()

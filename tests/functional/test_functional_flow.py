@@ -13,7 +13,13 @@ from a_chatter.service import AChatterService
 from a_chatter.tools import AChatterToolService
 from a_chatter.utils import make_id, utc_now
 
-from tests.helpers import FakeContext, build_parse_response, default_sdk_context
+from tests.helpers import (
+    FakeContext,
+    build_confirmation_intent_response,
+    build_confirmation_response,
+    build_parse_response,
+    default_sdk_context,
+)
 
 
 async def _build_service(tmp_path: Path, llm_responses: List[str]) -> tuple[AChatterService, FakeContext]:
@@ -35,13 +41,17 @@ def _explicit_group_parse_response(run_at: str) -> str:
 @pytest.mark.asyncio
 async def test_command_create_confirm_and_list_flow(tmp_path: Path) -> None:
     run_at = (utc_now() + timedelta(hours=1)).isoformat()
-    service, context = await _build_service(tmp_path, [build_parse_response(run_at)])
+    service, context = await _build_service(tmp_path, [build_parse_response(run_at), build_confirmation_response()])
     commands = AChatterCommandService(service)
     sdk_context = default_sdk_context()
 
     success, _, _ = await commands.handle("新增 明天晚上八点提醒我交报告", "qq-private-10000", sdk_context)
     assert success is True
-    assert "请确认是否创建" in context.send.sent_texts[-1][1]
+    assert "我先帮你核对一下" in context.send.sent_texts[-1][1]
+    assert "qq:private:10000" in context.send.sent_texts[-1][1]
+    assert "/ac 确认" in context.send.sent_texts[-1][1]
+    assert "/ac 取消" in context.send.sent_texts[-1][1]
+    assert "确认消息润色器" in context.llm.prompts[1]
 
     success, _, _ = await commands.handle("确认", "qq-private-10000", sdk_context)
     assert success is True
@@ -55,7 +65,7 @@ async def test_command_create_confirm_and_list_flow(tmp_path: Path) -> None:
 @pytest.mark.asyncio
 async def test_tool_create_and_confirm_flow(tmp_path: Path) -> None:
     run_at = (utc_now() + timedelta(hours=1)).isoformat()
-    service, _ = await _build_service(tmp_path, [build_parse_response(run_at)])
+    service, _ = await _build_service(tmp_path, [build_parse_response(run_at), build_confirmation_response()])
     tools = AChatterToolService(service)
     sdk_context = default_sdk_context()
 
@@ -64,12 +74,78 @@ async def test_tool_create_and_confirm_flow(tmp_path: Path) -> None:
     assert draft_result["success"] is True
     assert draft_result["requires_user_confirmation"] is True
     assert draft_result["draft_id"]
+    assert draft_result["content"] == draft_result["confirmation_text"]
+    assert "/ac 确认" in draft_result["content"]
 
     confirm_result = await tools.confirm_task("", sdk_context)
 
     assert confirm_result["success"] is True
     assert confirm_result["task_id"]
     assert "交报告提醒" in confirm_result["task_summary"]
+
+
+@pytest.mark.asyncio
+async def test_natural_confirmation_reply_confirms_pending_draft(tmp_path: Path) -> None:
+    run_at = (utc_now() + timedelta(hours=1)).isoformat()
+    service, context = await _build_service(tmp_path, [build_parse_response(run_at), build_confirmation_response()])
+    sdk_context = default_sdk_context()
+
+    await service.create_draft("明天晚上八点提醒我交报告", sdk_context)
+    handled, response, intent = await service.handle_natural_confirmation_reply("就这样，帮我设上", sdk_context)
+
+    assert handled is True
+    assert intent.decision.value == "confirm"
+    assert "已创建任务" in response
+    tasks = await service.storage.list_tasks(target_stream_id="qq-private-10000")
+    assert len(tasks) == 1
+    assert tasks[0].title == "交报告提醒"
+    assert len(context.llm.prompts) == 2
+
+
+@pytest.mark.asyncio
+async def test_natural_confirmation_reply_can_use_llm_to_cancel(tmp_path: Path) -> None:
+    run_at = (utc_now() + timedelta(hours=1)).isoformat()
+    service, context = await _build_service(
+        tmp_path,
+        [
+            build_parse_response(run_at),
+            build_confirmation_response(),
+            build_confirmation_intent_response("cancel"),
+        ],
+    )
+    sdk_context = default_sdk_context()
+
+    await service.create_draft("明天晚上八点提醒我交报告", sdk_context)
+    handled, response, intent = await service.handle_natural_confirmation_reply("这版先停一下，回头再说", sdk_context)
+
+    assert handled is True
+    assert intent.decision.value == "cancel"
+    assert "已取消草稿" in response
+    assert "二次确认回复判定器" in context.llm.prompts[-1]
+    drafts = await service.storage.list_pending_for_actor("qq", "10000")
+    assert drafts == []
+
+
+@pytest.mark.asyncio
+async def test_tool_confirm_accepts_natural_user_reply(tmp_path: Path) -> None:
+    run_at = (utc_now() + timedelta(hours=1)).isoformat()
+    service, _ = await _build_service(
+        tmp_path,
+        [
+            build_parse_response(run_at),
+            build_confirmation_response(),
+            build_confirmation_intent_response("confirm"),
+        ],
+    )
+    tools = AChatterToolService(service)
+    sdk_context = default_sdk_context()
+
+    await tools.create_task_draft("明天晚上八点提醒我交报告", sdk_context)
+    confirm_result = await tools.confirm_task("", sdk_context, user_reply="可以，就按这个来")
+
+    assert confirm_result["success"] is True
+    assert confirm_result["decision"] == "confirm"
+    assert "已创建任务" in confirm_result["content"]
 
 
 @pytest.mark.asyncio
@@ -147,7 +223,7 @@ async def test_super_admin_can_create_cross_stream_group_task(tmp_path: Path) ->
     run_at = (utc_now() + timedelta(hours=1)).isoformat()
     config = AChatterConfig()
     config.permissions.super_admins = ["qq:10000"]
-    context = FakeContext([_explicit_group_parse_response(run_at)])
+    context = FakeContext([_explicit_group_parse_response(run_at), build_confirmation_response()])
     service = AChatterService(context, config, tmp_path)
     await service.start()
     commands = AChatterCommandService(service)
@@ -159,9 +235,11 @@ async def test_super_admin_can_create_cross_stream_group_task(tmp_path: Path) ->
     )
 
     assert success is True
+    assert "/ac 确认" in confirmation_text
     assert "qq:group:123456" in confirmation_text
     drafts = await service.storage.list_pending_for_actor("qq", "10000")
     assert len(drafts) == 1
+    assert drafts[0].target.key == "qq:group:123456"
     assert drafts[0].target.stream_id == "qq-group-123456"
 
 

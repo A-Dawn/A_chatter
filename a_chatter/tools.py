@@ -19,7 +19,7 @@ class AChatterToolService:
             draft, confirmation_text = await self._service.create_draft(user_request, context)
             return {
                 "success": True,
-                "content": "已创建待确认草稿，请用户确认。",
+                "content": confirmation_text,
                 "draft_id": draft.draft_id,
                 "requires_user_confirmation": True,
                 "confirmation_expires_in_seconds": self._service.config.confirmation.pending_ttl_seconds,
@@ -37,10 +37,21 @@ class AChatterToolService:
         except (PermissionError, TaskParseError, ValueError) as exc:
             return {"success": False, "content": str(exc)}
 
-    async def confirm_task(self, draft_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def confirm_task(self, draft_id: str, context: Dict[str, Any], user_reply: str = "") -> Dict[str, Any]:
         """确认待确认草稿。"""
 
         try:
+            if user_reply.strip():
+                handled, content, intent = await self._service.handle_natural_confirmation_reply(user_reply, context)
+                if not handled:
+                    return {"success": False, "content": "未识别到明确确认意图。", "decision": intent.decision.value}
+                return {
+                    "success": True,
+                    "content": content,
+                    "decision": intent.decision.value,
+                    "draft_id": intent.draft_id,
+                }
+
             task = await self._service.confirm_draft(context, draft_id)
             return {
                 "success": True,
@@ -51,10 +62,21 @@ class AChatterToolService:
         except (PermissionError, ValueError) as exc:
             return {"success": False, "content": str(exc)}
 
-    async def cancel_draft(self, draft_id: str, context: Dict[str, Any]) -> Dict[str, Any]:
+    async def cancel_draft(self, draft_id: str, context: Dict[str, Any], user_reply: str = "") -> Dict[str, Any]:
         """取消待确认草稿。"""
 
         try:
+            if user_reply.strip():
+                handled, content, intent = await self._service.handle_natural_confirmation_reply(user_reply, context)
+                if not handled:
+                    return {"success": False, "content": "未识别到明确取消意图。", "decision": intent.decision.value}
+                return {
+                    "success": True,
+                    "content": content,
+                    "decision": intent.decision.value,
+                    "draft_id": intent.draft_id,
+                }
+
             canceled_id = await self._service.cancel_draft(context, draft_id)
             return {"success": True, "content": f"已取消草稿：{canceled_id}", "draft_id": canceled_id}
         except ValueError as exc:
