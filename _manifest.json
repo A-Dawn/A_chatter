@@ -1,0 +1,68 @@
+{
+  "manifest_version": 2,
+  "version": "0.1.0",
+  "name": "进阶闲谈家",
+  "description": "面向 MaiBot 的日程、提醒、联网检索与主动发言编排插件。",
+  "author": {
+    "name": "A-Dawn",
+    "url": "https://github.com/A-Dawn"
+  },
+  "license": "GPL-3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/A-Dawn/A_chatter",
+    "homepage": "https://github.com/A-Dawn/A_chatter",
+    "documentation": "https://github.com/A-Dawn/A_chatter/blob/main/README.md",
+    "issues": "https://github.com/A-Dawn/A_chatter/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.0.0"
+  },
+  "sdk": {
+    "min_version": "2.5.3",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [
+    {
+      "type": "python_package",
+      "name": "httpx",
+      "version_spec": ">=0.24.0"
+    },
+    {
+      "type": "python_package",
+      "name": "croniter",
+      "version_spec": ">=2.0.0"
+    }
+  ],
+  "capabilities": [
+    "send.text",
+    "llm.generate",
+    "chat.get_all_streams",
+    "chat.get_group_streams",
+    "chat.get_private_streams",
+    "chat.get_stream_by_group_id",
+    "chat.get_stream_by_user_id",
+    "message.get_recent",
+    "message.get_by_time_in_chat",
+    "message.count_new",
+    "message.build_readable",
+    "knowledge.search",
+    "maisaka.context.append",
+    "maisaka.proactive.trigger"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "locales_path": "_locales",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "display": {
+    "icon": {
+      "type": "lucide",
+      "value": "messages-square",
+      "background": "#2563EB"
+    }
+  },
+  "id": "github.A-Dawn.a-chatter"
+}
