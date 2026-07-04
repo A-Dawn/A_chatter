@@ -1,10 +1,10 @@
 """A_chatter 插件组件注册测试。"""
 
-from plugin import create_plugin
+from tests.runtime_loader import load_plugin_module
 
 
 def test_plugin_registers_command_and_visible_tools() -> None:
-    plugin = create_plugin()
+    plugin = load_plugin_module().create_plugin()
     components = plugin.get_components()
     names = {component["name"]: component for component in components}
 
