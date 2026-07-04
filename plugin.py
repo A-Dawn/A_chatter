@@ -6,11 +6,11 @@ from typing import Any, Dict
 from maibot_sdk import Command, HookHandler, MaiBotPlugin, Tool
 from maibot_sdk.types import HookMode, HookOrder
 
-from a_chatter.commands import AChatterCommandService
-from a_chatter.config import AChatterConfig
-from a_chatter.scheduler import AChatterScheduler
-from a_chatter.service import AChatterService
-from a_chatter.tools import AChatterToolService
+from .a_chatter.commands import AChatterCommandService
+from .a_chatter.config import AChatterConfig
+from .a_chatter.scheduler import AChatterScheduler
+from .a_chatter.service import AChatterService
+from .a_chatter.tools import AChatterToolService
 
 
 class AChatterPlugin(MaiBotPlugin):
