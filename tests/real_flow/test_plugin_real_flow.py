@@ -6,12 +6,16 @@ from typing import Any, Dict
 
 import pytest
 
-from a_chatter.config import AChatterConfig
-from plugin import AChatterPlugin
 from src.plugin_runtime.host.component_registry import ComponentRegistry
 from src.plugin_runtime.host.hook_dispatcher import HookDispatcher
 from src.plugin_runtime.protocol.envelope import Envelope, MessageType
 from tests.helpers import FakeContext, build_confirmation_response, build_future_parse_response
+from tests.runtime_loader import load_plugin_module
+
+
+plugin_module = load_plugin_module()
+AChatterConfig = plugin_module.AChatterConfig
+AChatterPlugin = plugin_module.AChatterPlugin
 
 
 def _inject_plugin_runtime(plugin: AChatterPlugin, context: FakeContext, tmp_path: Path) -> None:
