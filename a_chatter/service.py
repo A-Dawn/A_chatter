@@ -3,6 +3,7 @@
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from zoneinfo import ZoneInfo
 
 import random
 
@@ -306,7 +307,8 @@ class AChatterService:
                 from croniter import croniter
             except ImportError as exc:
                 raise RuntimeError("croniter 未安装，无法计算 cron 任务下一次运行时间") from exc
-            return croniter(task.schedule.cron, now).get_next(datetime).astimezone(timezone.utc)
+            local_now = now.astimezone(ZoneInfo(task.schedule.timezone))
+            return croniter(task.schedule.cron, local_now).get_next(datetime).astimezone(timezone.utc)
         return None
 
     def is_quiet_now(self, target: ChatTarget) -> bool:
